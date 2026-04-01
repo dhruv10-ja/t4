@@ -1,0 +1,493 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define MAX_ACCOUNTS 100
+#define MAX_TRANSACTIONS 100
+#define DATA_FILE "bank_data.dat"
+#define ADMIN_PASSWORD 9999
+#define DAILY_WITHDRAW_LIMIT 5000
+#define MAX_LOGIN_ATTEMPTS 3
+#define SAVINGS_INTEREST 0.04
+
+struct Account{
+    int accNum;
+    int pin;
+    char name[50];
+    char mobile[15];
+    char email[50];
+    float balance;
+    int isSavings;
+    float todayWithdrawn;
+    int isFrozen;
+    int loginAttempts;
+    char lastWithdrawDate[15];
+    char history[MAX_TRANSACTIONS][200];
+    int transCount;
+};
+
+/* ================= DATE TIME ================= */
+
+void getDateTime(char *buffer){
+    time_t t=time(NULL);
+    strftime(buffer,30,"%d-%m-%Y %H:%M:%S",localtime(&t));
+}
+
+void getDate(char *buffer){
+    time_t t=time(NULL);
+    strftime(buffer,15,"%d-%m-%Y",localtime(&t));
+}
+
+/* ================= HISTORY ================= */
+
+void addHistory(struct Account *acc,const char *msg){
+    if(acc->transCount>=MAX_TRANSACTIONS) return;
+
+    char timeStr[30];
+    getDateTime(timeStr);
+
+    snprintf(acc->history[acc->transCount],
+             sizeof(acc->history[0]),
+             "%s | %s", timeStr,msg);
+
+    acc->transCount++;
+}
+
+/* ================= FILE ================= */
+
+void saveData(struct Account bank[],int count){
+    FILE *fp=fopen(DATA_FILE,"wb");
+    if(!fp) return;
+    fwrite(&count,sizeof(int),1,fp);
+    fwrite(bank,sizeof(struct Account),count,fp);
+    fclose(fp);
+}
+
+void loadData(struct Account bank[],int *count){
+    FILE *fp=fopen(DATA_FILE,"rb");
+    if(fp==NULL){
+        *count=0;
+        return;
+    }
+    fread(count,sizeof(int),1,fp);
+    fread(bank,sizeof(struct Account),*count,fp);
+    fclose(fp);
+}
+
+/* ================= BASIC ================= */
+
+int findAccountIndex(struct Account bank[],int count,int id){
+    for(int i=0;i<count;i++)
+        if(bank[i].accNum==id) return i;
+    return -1;
+}
+
+int authenticate(struct Account bank[],int index){
+    int p;
+    printf("Enter PIN: ");
+    scanf("%d",&p);
+    return bank[index].pin==p;
+}
+
+/* ================= OTP ================= */
+
+int generateOTP(){
+    return rand()%9000+1000;
+}
+
+int verifyOTP(char mobile[], char email[]){
+    int otp=generateOTP();
+    printf("\nOTP sent to registered mobile/email\n");
+    printf("(Demo OTP = %d)\n",otp);
+
+    int entered;
+    printf("Enter OTP: ");
+    scanf("%d",&entered);
+
+    if(entered==otp){
+        printf("OTP verified successfully\n");
+        return 1;
+    } else{
+        printf("Wrong OTP\n");
+        return 0;
+    }
+}
+
+/* ================= CUSTOMER ================= */
+
+void deposit(struct Account bank[],int i){
+    float amt;
+    printf("Amount: ");
+    scanf("%f",&amt);
+
+    if(amt<=0){ printf("Invalid amount\n"); return; }
+
+    bank[i].balance+=amt;
+    addHistory(&bank[i],"Deposit");
+    printf("Deposit successful\n");
+}
+
+void withdraw(struct Account bank[],int i){
+    char today[15];
+    getDate(today);
+
+    if(strcmp(bank[i].lastWithdrawDate,today)!=0){
+        bank[i].todayWithdrawn=0;
+        strcpy(bank[i].lastWithdrawDate,today);
+    }
+
+    float amt;
+    printf("Amount: ");
+    scanf("%f",&amt);
+
+    if(amt<=0 || amt>bank[i].balance){
+        printf("Invalid amount\n");
+        return;
+    }
+
+    if(bank[i].todayWithdrawn+amt>DAILY_WITHDRAW_LIMIT){
+        printf("Daily limit exceeded\n");
+        return;
+    }
+
+    bank[i].balance-=amt;
+    bank[i].todayWithdrawn+=amt;
+
+    addHistory(&bank[i],"Withdraw");
+    printf("Withdraw successful\n");
+}
+
+void transfer(struct Account bank[],int count,int s){
+    int r; float amt;
+
+    printf("Recipient account: ");
+    scanf("%d",&r);
+
+    int ri=findAccountIndex(bank,count,r);
+    if(ri==-1){ printf("Invalid account\n"); return; }
+
+    printf("Amount: ");
+    scanf("%f",&amt);
+
+    if(amt<=0 || amt>bank[s].balance){
+        printf("Invalid amount\n");
+        return;
+    }
+
+    bank[s].balance-=amt;
+    bank[ri].balance+=amt;
+
+    addHistory(&bank[s],"Transfer Sent");
+    addHistory(&bank[ri],"Transfer Received");
+
+    printf("Transfer successful\n");
+}
+
+void applyInterest(struct Account bank[],int i){
+    if(bank[i].isSavings){
+        float interest=bank[i].balance*SAVINGS_INTEREST;
+        bank[i].balance+=interest;
+        addHistory(&bank[i],"Interest Added");
+        printf("Interest added successfully\n");
+    } else{
+        printf("Only savings account gets interest\n");
+    }
+}
+
+void checkBalance(struct Account bank[],int i){
+    printf("Balance: %.2f\n",bank[i].balance);
+}
+
+void fullStatement(struct Account bank[],int i){
+    printf("\nFull Statement:\n");
+    for(int t=0;t<bank[i].transCount;t++)
+        printf("%s\n",bank[i].history[t]);
+}
+
+/* ================= ADMIN ================= */
+
+void createAccount(struct Account bank[],int *count){
+    if(*count>=MAX_ACCOUNTS){
+        printf("Account limit reached\n");
+        return;
+    }
+
+    struct Account *a=&bank[*count];
+    a->accNum=(*count==0)?1001:bank[*count-1].accNum+1;
+
+    printf("Name: ");
+    scanf(" %[^\n]",a->name);
+
+    printf("Mobile: ");
+    scanf("%s",a->mobile);
+
+    printf("Email: ");
+    scanf("%s",a->email);
+
+    if(!verifyOTP(a->mobile,a->email)){
+        printf("Account creation cancelled\n");
+        return;
+    }
+
+    printf("PIN: ");
+    scanf("%d",&a->pin);
+
+    printf("Savings(1)/Current(0): ");
+    scanf("%d",&a->isSavings);
+
+    a->balance=500;
+    a->todayWithdrawn=0;
+    a->isFrozen=0;
+    a->loginAttempts=0;
+    strcpy(a->lastWithdrawDate,"");
+    a->transCount=0;
+
+    addHistory(a,"Account Created");
+    (*count)++;
+
+    printf("Account created successfully. Account No: %d\n",a->accNum);
+}
+
+void deleteAccount(struct Account bank[],int *count){
+    int id;
+    printf("Account number to delete: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,*count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    if(!verifyOTP(bank[i].mobile,bank[i].email)){
+        printf("Deletion cancelled\n");
+        return;
+    }
+
+    for(int j=i;j<*count-1;j++)
+        bank[j]=bank[j+1];
+
+    (*count)--;
+    printf("Account deleted successfully\n");
+}
+
+void viewAll(struct Account bank[],int count){
+    for(int i=0;i<count;i++)
+        printf("%d %s %.2f %s\n",
+        bank[i].accNum,
+        bank[i].name,
+        bank[i].balance,
+        bank[i].isFrozen?"Frozen":"Active");
+}
+
+void totalBankBalance(struct Account bank[],int count){
+    float total=0;
+    for(int i=0;i<count;i++)
+        total+=bank[i].balance;
+    printf("Total Bank Balance: %.2f\n",total);
+}
+
+void freezeAccount(struct Account bank[],int count){
+    int id;
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    bank[i].isFrozen=1;
+    printf("Account frozen successfully\n");
+}
+
+void unfreezeAccount(struct Account bank[],int count){
+    int id;
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    bank[i].isFrozen=0;
+    bank[i].loginAttempts=0;
+    printf("Account unfrozen successfully\n");
+}
+
+void changeToSavings(struct Account bank[],int count){
+    int id;
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    bank[i].isSavings=1;
+    printf("Changed to Savings successfully\n");
+}
+
+void changeToCurrent(struct Account bank[],int count){
+    int id;
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    bank[i].isSavings=0;
+    printf("Changed to Current successfully\n");
+}
+
+void adminDeposit(struct Account bank[],int count){
+    int id; float amt;
+
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    printf("Amount: ");
+    scanf("%f",&amt);
+
+    bank[i].balance+=amt;
+    printf("Admin deposit successful\n");
+}
+
+void adminWithdraw(struct Account bank[],int count){
+    int id; float amt;
+
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    printf("Amount: ");
+    scanf("%f",&amt);
+
+    if(amt>bank[i].balance){
+        printf("Insufficient balance\n");
+        return;
+    }
+
+    bank[i].balance-=amt;
+    printf("Admin withdraw successful\n");
+}
+
+/* ================= FORGOT PIN ================= */
+
+void forgotPIN(struct Account bank[],int count){
+    int id;
+    printf("Account number: ");
+    scanf("%d",&id);
+
+    int i=findAccountIndex(bank,count,id);
+    if(i==-1){ printf("Not found\n"); return; }
+
+    if(!verifyOTP(bank[i].mobile,bank[i].email)){
+        printf("PIN reset cancelled\n");
+        return;
+    }
+
+    printf("New PIN: ");
+    scanf("%d",&bank[i].pin);
+
+    printf("PIN reset successful\n");
+}
+
+/* ================= MAIN ================= */
+
+int main(){
+    srand(time(NULL));
+
+    struct Account bank[MAX_ACCOUNTS];
+    int count=0;
+    loadData(bank,&count);
+
+    int choice;
+
+    while(1){
+        printf("\n1 Admin\n2 Customer\n3 Forgot PIN\n4 Exit\nChoice: ");
+        scanf("%d",&choice);
+
+        if(choice==1){
+            int pass;
+            printf("Admin password: ");
+            scanf("%d",&pass);
+
+            if(pass==ADMIN_PASSWORD){
+                int ch;
+                do{
+                    printf("\n1 Create\n2 Delete\n3 View All\n4 Total Balance\n");
+                    printf("5 Freeze\n6 Unfreeze\n7 To Savings\n8 To Current\n");
+                    printf("9 Admin Deposit\n10 Admin Withdraw\n11 Logout\nChoice: ");
+                    scanf("%d",&ch);
+
+                    if(ch==1) createAccount(bank,&count);
+                    else if(ch==2) deleteAccount(bank,&count);
+                    else if(ch==3) viewAll(bank,count);
+                    else if(ch==4) totalBankBalance(bank,count);
+                    else if(ch==5) freezeAccount(bank,count);
+                    else if(ch==6) unfreezeAccount(bank,count);
+                    else if(ch==7) changeToSavings(bank,count);
+                    else if(ch==8) changeToCurrent(bank,count);
+                    else if(ch==9) adminDeposit(bank,count);
+                    else if(ch==10) adminWithdraw(bank,count);
+
+                    saveData(bank,count);
+
+                }while(ch!=11);
+            }
+        }
+
+        else if(choice==2){
+            int id;
+            printf("Account number: ");
+            scanf("%d",&id);
+
+            int idx=findAccountIndex(bank,count,id);
+            if(idx==-1){ printf("Not found\n"); continue; }
+
+            if(bank[idx].isFrozen){
+                printf("Account frozen\n");
+                continue;
+            }
+
+            if(!authenticate(bank,idx)){
+                bank[idx].loginAttempts++;
+                if(bank[idx].loginAttempts>=3){
+                    bank[idx].isFrozen=1;
+                    printf("Account frozen due to failed attempts\n");
+                }
+                saveData(bank,count);
+                continue;
+            }
+
+            bank[idx].loginAttempts=0;
+
+            int sub;
+            do{
+                printf("\n1 Deposit 2 Withdraw 3 Transfer\n");
+                printf("4 Interest 5 Balance 6 Statement 7 Logout\nChoice: ");
+                scanf("%d",&sub);
+
+                if(sub==1) deposit(bank,idx);
+                else if(sub==2) withdraw(bank,idx);
+                else if(sub==3) transfer(bank,count,idx);
+                else if(sub==4) applyInterest(bank,idx);
+                else if(sub==5) checkBalance(bank,idx);
+                else if(sub==6) fullStatement(bank,idx);
+
+                saveData(bank,count);
+
+            }while(sub!=7);
+        }
+
+        else if(choice==3){
+            forgotPIN(bank,count);
+            saveData(bank,count);
+        }
+
+        else if(choice==4){
+            saveData(bank,count);
+            break;
+        }
+    }
+}
